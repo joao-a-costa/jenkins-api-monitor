@@ -2,6 +2,7 @@ pipeline {
     agent any
 
     environment {
+        // Optional: define the timezone for work hours here if needed
         TIMEZONE = 'CET'
     }
 
@@ -31,7 +32,7 @@ pipeline {
                     def toNotify = []
                     def recovered = []
 
-                    sh 'mkdir -p .failures'
+                    sh 'mkdir -p .failures .notified'
 
                     apis.each { api ->
                         def cmd = """
@@ -52,23 +53,29 @@ pipeline {
                         def lastStatus = fileExists(statusFile) ? readFile(statusFile).trim() : "OK"
 
                         if (response == "200") {
-                            echo "✅ ${api.name} OK"
-                            writeFile file: failFile, text: "0"
-                            if (lastStatus == "FAIL") {
-                                if (!workHoursOnlyAPIs.contains(api.name) || withinWorkHours) {
-                                    recovered << "${api.name} - Now OK"
-                                } else {
-                                    echo "⏰ Skipping recovery notification for ${api.name} (outside working hours)"
-                                }
-                            }
-                            if (fileExists(failFile)) { sh "rm ${failFile}" }
-                            if (fileExists(statusFile)) { sh "rm ${statusFile}" }
-                        } else {
+							echo "✅ ${api.name} OK"
+
+							if (lastStatus == "FAIL" && fileExists(".notified/${safeName}.txt")) {
+								if (!workHoursOnlyAPIs.contains(api.name) || withinWorkHours) {
+									recovered << "${api.name} - Now OK"
+								} else {
+									echo "⏰ Skipping recovery notification for ${api.name} (outside working hours)"
+								}
+								sh "rm -f .notified/${safeName}.txt"
+								sh "rm -f ${failFile} ${statusFile}"
+							} else {
+								// API recovered silently (no alert was sent before), just reset fail count
+								writeFile file: failFile, text: "0"
+								writeFile file: statusFile, text: "OK"
+							}
+						}
+						 else {
                             failureCount++
                             writeFile file: failFile, text: failureCount.toString()
                             echo "❌ ${api.name} NOT OK — Status: ${response} — Fail count: ${failureCount}"
 
                             if (failureCount % 3 == 0) {
+								writeFile file: ".notified/${safeName}.txt", text: "notified"
                                 if (!workHoursOnlyAPIs.contains(api.name) || withinWorkHours) {
                                     toNotify << "${api.name} — Status: ${response} (Failed ${failureCount} times) — URL: ${api.url}"
                                 } else {
